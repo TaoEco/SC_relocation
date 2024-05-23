@@ -1,0 +1,1920 @@
+---
+title: "LCOS"
+author: "Tao"
+date: '2023-12-21'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 01 Introduction
+
+The aim of this study is to compare the industrial relocation strategies with the conventional production process. Thus we first constructed cost models for 7 supply chains, among which, SC1-SC3 are illustrating the relocation strategy. 
+
+
+Then we analyzed the composition items of LCOS, detected the dominant factors affecting the uncertainty of LCOS, and lastly we systematically compare the LCOS in various scenarios under policy targets, technology scenarios to assess the relative policy implications.  
+
+
+# 02 Establish various cost models
+## Load Packages
+```{r}
+library(tidyverse)
+library(readxl)
+library(reshape2)
+library(ggplot2)
+library(RColorBrewer)
+library(dominanceanalysis) #https://github.com/cran/dominanceanalysis
+library(ggsci)
+#devtools::install_github("clbustos/dominanceAnalysis")
+#remotes::install_github("nanxstats/ggsci")
+
+now() %>% tibble() # check the time stamp of execution 
+```
+
+
+##  SC1: Aus(H2,ore) ,Japan(DRI,EAF,process)
+
+note: Australia provides H2 & iron ore to Japan, then H2-DRI-EAF together with casting & rolling are carried in Japan.
+```{r}
+cost_model_SC1 <- function(
+    H2_prod_eff=20.4,# kg H2/MWh; (Delvin, 2022)
+    ele_water_price=2.1, # USD/kL; (Grattan Institute, 2020)                 
+    CAP_electro_price=1210959, #USD/MW; (Jang,2022)
+    LH2_trans_cost_coeffi=2.1, #USD/kg H2; (Raab, 2021)
+    electro_cap_factor=0.865, #(Thyssenkrupp,2018)
+    electricity_price_J = 188,#$/MWh; (Matsuo, 2021)   
+    electricity_price_A = 59,  #$/MWh; (Lu, 2021)
+    carbon_price = 109.64,  #USD/ton CO2 in EU expected in 2030
+    labor_price_A = 60, # USD/hour; in Australia (Grattan Institute, 2020)   
+    NG_price =0.0683, # USD/kWh; average LNG import price in 2022 in Japan. [Ministry of Finance, Trade Statistics of Japan, 2023]
+    cokingCoal_price =134.86, #USD/t; Japan coking coal import CIF price; https://ourworldindata.org/grapher/coal-prices
+    scrap_price = 217, #USD/ton, 49140 JPY/ton, i.e. 475.98 USD/ton
+    return_value = "LCOS", 
+    Carbon_price_exist = FALSE){
+
+#————————————————
+  
+#Section 1. H2 electrolyzer capacity assessment
+H2_demand_pre_DRI_effi <- 72 # kg/ton; 1 ton DRI needs 52 kg H2 (Delvin, 2022); 72 kg H2 (Graten, 2020); 102 kg H2 (Gielen, 2021) Here only for pre-DRI
+H2_demand_steel <- H2_demand_pre_DRI_effi
+steel_capacity_factor <- 0.89 # (Delvin, 2022)
+steel_capacity <- 115 # ton/hour; Ref: we assume the capacity of steel plant as 1Mt/year with 7/24 running, which equals 115 ton/hour
+H2_capacity <-   steel_capacity* H2_demand_steel / (H2_prod_eff*electro_cap_factor) # MW; electrolyzer capacity demand to produce 1 Mt/year
+
+#————————————————
+
+#Section 2. CAPEX 
+#CAPEX
+CAP_DRI = 271000000 /steel_capacity_factor  # USD/Mt;  (hydrogen based) (Vogl, 2018)
+CAP_EAF = 217000000 /steel_capacity_factor  # USD/Mt; (Vogl, 2018)
+CAP_electro = CAP_electro_price * H2_capacity  #USD/Mt
+CAP_process = (54 + 123) *1000000 # USD/Mt; rated steel capacity; casting and hot rolling respectively;  (Grattan Institute, 2020)   
+CAPEX = (CAP_DRI + CAP_EAF + CAP_process)/steel_capacity_factor + CAP_electro# USD/Mt
+
+#————————————————
+
+#Section 3. OPEX
+
+#OPEX_DRI
+DRI_ore_input = 1.4 # ton/ton; iron ore demand per tonne DRI
+DRI_water_input = 1.3 # kL; water demand per tonne DRI
+DRI_labor_input = 73 # FTE/Mt; rated DRI capacity (hydrogen based); 1 FTE = 2088 hours
+DRI_ore_price = 100 # $/t input;
+DRI_water_price = 4.1 # USD/kL;
+DRI_labor_price = 28 # $/hour; 60 in AUS, 28 in Japan
+steel_conv_factor = 1.17 # ton/ton; 1 ton steel need 1.17 DRI
+OPEX_DRI = (DRI_ore_input  * DRI_ore_price *1000000  + 
+            DRI_water_input* DRI_water_price *1000000+ 
+            DRI_labor_input* DRI_labor_price*2088)*steel_conv_factor # USD/Mt
+
+#OPEX_EAF
+EAF_electricity_input = 0.43 # MWh/ton; MWh per tonne of steel (hot DRI feed)
+EAF_water_input = 1.6 # kL; water demand per tonne DRI
+EAF_labor_input = 167 #FTE/Mt; rated steel capacity
+EAF_water_price = 4.1 # USD/kL;
+EAF_labor_price = 28 # $/hour; 60 in AUS, 28 in Japan
+OPEX_EAF = (EAF_electricity_input  * electricity_price_J * 1000000  + 
+            EAF_water_input* EAF_water_price * 1000000 + 
+            EAF_labor_input* EAF_labor_price*2088) # USD/Mt
+
+#OPEX_electro
+ele_electricity_input = H2_capacity * electro_cap_factor * 24*365 # MWh/ton; MWh per tonne of steel
+ele_water_effi = 0.01 # kL/kg, Litres of water required to produce each kg of H2
+ele_water_input =  ele_water_effi * H2_demand_steel *1000000 # kL/year 
+ele_labor_input = 167 #FTE/Mt; rated steel capacity
+ele_labor_price = labor_price_A # $/hour
+OPEX_electro = (ele_electricity_input  * electricity_price_A   + 
+            ele_water_input* ele_water_price + 
+            ele_labor_input* ele_labor_price*2088) # USD/Mt
+
+#OPEX_process
+pro_electricity_input = 0.12 # MWh/ton; electricity demand per tonne of steel; 0.01 for casting, 0.11 for hot rolling
+pro_water_input = 3.2 #kL/ton; 1.0 for casting, 2.2 for hot rolling
+pro_labor_input = 220 #FTE/Mt; rated steel capacity; 100 for casting, 120 for hot rolling
+pro_water_price = 2.1 # USD/kL;
+pro_labor_price = 28 # $/hour; 60 in AUS; 28 in Japan
+OPEX_process = (pro_electricity_input  * electricity_price_J *1000000  + 
+            pro_water_input* pro_water_price *1000000 + 
+            pro_labor_input* pro_labor_price*2088) # USD/Mt
+
+#OPEX_transport
+bulk_trans_price <- 23.3 # USD/ton; Pilbara to Japan, only for dry bulk carrier
+LH2_trans_cost <- (H2_demand_steel) * 1000000 *LH2_trans_cost_coeffi # USD/Mt; H2 for all process will be generated in AUS and transferred to Japan
+ore_DRI_conv <- 1.5 # 1.5 kg ore per kg DRI-steel (Devlin,2022)
+OPEX_transport <- bulk_trans_price * 1000000 * ore_DRI_conv + LH2_trans_cost # USD/Mt; first part is the iron ore transport cost, the second is H2 transport cost which supports DRI-EAF-Processing in Japan
+
+#OPEX_maintainance
+OPEX_maintainance = 0.02 * CAPEX  # USD/ton
+OPEX = OPEX_DRI + OPEX_EAF + OPEX_electro + OPEX_process + OPEX_maintainance + OPEX_transport  # USD/Mt
+
+#————————————————
+
+#Section 4. Carbon price 
+# This part is flexible to consider power system CO2 intensity. Now we assume using green electricity
+electricity_g_J = EAF_electricity_input  + pro_electricity_input
+carbon_emission_unit = electricity_g_J * 0.22 # ton CO2 / ton steel
+carbon_uncapture_ratio = 0.4 # CCS uncapture_ratio
+carbon_neutral_fatcor = 0 # assume that power sector has been fully decarbonized
+Carbon_cost_Mt = carbon_price * carbon_emission_unit * carbon_neutral_fatcor  * 1000000 #USD/Mt
+
+#————————————————
+
+#Section 5. Outputs
+M_steel = 1000000 #1Mt steel per year
+i= 0.07 #discount rate
+N= 20 #life time of steel plant(consistent through all plants)
+CRF = (i*(1+i)^N)/((1+i)^N-1)
+LCOS =(CAPEX * CRF + OPEX + Carbon_cost_Mt) / (M_steel)
+LCOH = (OPEX_electro + CAP_electro*CRF)/(H2_demand_pre_DRI_effi*1000000)
+
+if(return_value=="LCOS"){
+  return(LCOS) # USD/ton
+  
+}else if(return_value=="cost_composition"){
+  cost_compositon <- data.frame(CAPEX_DRI = CAP_DRI*CRF/(M_steel), 
+                                CAPEX_EAF = CAP_EAF*CRF/(M_steel), 
+                                CAPEX_Electrolyzer = CAP_electro*CRF/(M_steel),
+                                CAPEX_Casting_Rolling = CAP_process*CRF/(M_steel),
+                                OPEX_DRI = OPEX_DRI/M_steel,
+                                OPEX_EAF = OPEX_EAF/M_steel,
+                                OPEX_Electrolyzer = OPEX_electro/M_steel, 
+                                OPEX_Casting_Rolling = OPEX_process/M_steel,
+                                OPEX_Maintainance = OPEX_maintainance/M_steel,
+                                OPEX_Transport = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon) #USD/ton
+  
+}else if(return_value=="cost_items"){
+    cost_compositon <- data.frame(
+                                Steel_plant = (CAP_DRI+ CAP_EAF + CAP_process)*CRF/(M_steel*steel_capacity_factor),
+                                Electrolyzer = CAP_electro*CRF/(M_steel),
+                                Iron_ore = DRI_ore_input* DRI_ore_price*steel_conv_factor,
+                                Flux =  0,
+                                Labor = ((DRI_labor_input* DRI_labor_price*2088)*steel_conv_factor + EAF_labor_input* EAF_labor_price*2088 + ele_labor_input* ele_labor_price*2088 + pro_labor_input* pro_labor_price*2088)/M_steel,
+                                Water = (DRI_water_input* DRI_water_price *1000000*steel_conv_factor + EAF_water_input* EAF_water_price * 1000000 + ele_water_input* ele_water_price + pro_water_input* pro_water_price *1000000)/M_steel,
+                                Electricity = (EAF_electricity_input  * electricity_price_J * 1000000 + ele_electricity_input  * electricity_price_A + pro_electricity_input  * electricity_price_J *1000000)/M_steel,
+                                Maintainance = OPEX_maintainance/M_steel,
+                                Shipping = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon) # USD/ton
+}else if(return_value=="LCOH"){
+  return(LCOH) #USD/kg
+  
+}
+}
+
+cost_model_SC1(return_value = "LCOS")
+sum(cost_model_SC1(return_value = "cost_items"))
+cost_model_SC1(return_value = "cost_items")
+cost_model_SC1(return_value = "cost_items")/sum(cost_model_SC1(return_value = "cost_items"))
+
+```
+
+
+
+##  SC2: Aus(H2,DRI) ,Japan(EAF,process)
+note: Australia provides H2 and pre-DRI, then ships HBI to Japan. Then, Japan carries EAF, casting and rolling
+```{r}
+cost_model_SC2 <- function(
+    H2_prod_eff=20.4,# kg H2/MWh; (Delvin, 2022)
+    ele_water_price=2.1, # USD/kL; (Grattan Institute, 2020)                 
+    CAP_electro_price=1210959, #USD/MW; (Jang,2022)
+    LH2_trans_cost_coeffi=2.1, #USD/kg H2; (Raab, 2021)
+    electro_cap_factor=0.865, #(Thyssenkrupp,2018)
+    electricity_price_J = 188,#$/MWh; (Matsuo, 2021)   
+    electricity_price_A = 59,  #$/MWh; (Lu, 2021)
+    carbon_price = 109.64,  #USD/ton CO2 in EU expected in 2030
+    labor_price_A = 60, # USD/hour; in Australia
+    NG_price =0.0683, # USD/kWh; average LNG import price in 2022 in Japan. [Ministry of Finance, Trade Statistics of Japan, 2023]
+    cokingCoal_price =134.86, #USD/t; Japan coking coal import CIF price; https://ourworldindata.org/grapher/coal-prices
+    scrap_price = 217, #USD/ton, 49140 JPY/ton, i.e. 475.98 USD/ton
+    return_value = "LCOS", 
+    Carbon_price_exist = FALSE){
+  
+#————————————————
+  
+#Section 1. H2 capacity assessment
+H2_demand_pre_DRI_effi <- 72 # kg/ton; 1 ton DRI needs 52 kg H2 (Delvin, 2022); 72 kg H2 (Graten, 2020); 102 kg H2 (Gielen, 2021) Here only for pre-DRI
+H2_demand_steel <- H2_demand_pre_DRI_effi
+steel_capacity_factor <- 0.89
+steel_capacity <- 115 # ton/hour; Ref: we assume the capacity of steel plant as 1Mt/year with 7/24 running, which equals 115 ton/hour
+H2_capacity <-   steel_capacity* H2_demand_steel/(H2_prod_eff * electro_cap_factor) #MW;  electrolyzer capacity demand to produce 1 Mt/year
+
+#————————————————
+  
+#Section 2. CAPEX
+CAP_DRI = 271000000   # USD/Mt; (hydrogen based) (Vogl, 2018)
+CAP_EAF = 217000000   # USD/Mt; (Vogl, 2018)
+CAP_electro = CAP_electro_price * H2_capacity  # USD/Mt
+CAP_process = (54 + 123)*1000000 # USD/Mt; rated steel capacity; casting and hot rolling respectively
+CAPEX = (CAP_DRI + CAP_EAF + CAP_process)/steel_capacity_factor + CAP_electro# USD/Mt
+
+#————————————————
+  
+#Section 3. OPEX
+#OPEX_DRI
+DRI_ore_input = 1.4 # ton/ton;  iron ore demand per tonne DRI
+DRI_water_input = 1.3 # kL/ton; water demand per tonne DRI
+DRI_labor_input = 73 # FTE/Mt; rated DRI capacity (hydrogen based); 1 FTE = 2088 hours
+DRI_ore_price = 100 # USD/t;
+DRI_water_price = 2.1 # USD/kL;
+DRI_labor_price = labor_price_A # 78.1 # $/hour; 60.2 in Japan
+steel_conv_factor = 1.17 # 1 ton steel need 1.17 DRI
+OPEX_DRI = (DRI_ore_input  * DRI_ore_price *1000000  + 
+            DRI_water_input* DRI_water_price *1000000+ 
+            DRI_labor_input* DRI_labor_price*2088)*steel_conv_factor # USD/Mt
+
+#OPEX_EAF
+EAF_electricity_input = 0.43 # MWh/ton; electricity demand per tonne of steel (hot DRI feed)
+EAF_water_input = 1.6 # kL/ton; water demand per tonne of steel
+EAF_labor_input = 167 # FTE/Mt; rated steel capacity
+EAF_water_price = 2.1 # USD/kL
+EAF_labor_price = 28 # $/hour; 28 in Japan
+OPEX_EAF = (EAF_electricity_input  * electricity_price_J * 1000000  + 
+            EAF_water_input* EAF_water_price * 1000000 + 
+            EAF_labor_input* EAF_labor_price*2088) # USD/Mt
+
+#OPEX_electro
+ele_electricity_input = H2_capacity * electro_cap_factor * 24*365 # MWh/ton; electricity demand per tonne of steel
+ele_water_effi = 0.01 # kL/kg, Litres of water required to produce each kg of H2
+ele_water_input =  ele_water_effi * H2_demand_steel *1000000 # kL/year 
+ele_labor_input = 167 #FTE/Mt; rated steel capacity
+ele_labor_price = labor_price_A #60.2 # $/hour; 60.2 in Japan
+OPEX_electro = (ele_electricity_input  * electricity_price_A   + 
+            ele_water_input* ele_water_price + 
+            ele_labor_input* ele_labor_price*2088) # USD/Mt
+
+#OPEX_process
+pro_electricity_input = 0.12 # MWh/ton; electricity demand per tonne of steel; 0.01 for casting, 0.11 for hot rolling
+pro_water_input = 3.2 # kL/ton; water demand per Mt iron; 1.0 for casting, 2.2 for hot rolling
+pro_labor_input = 220 #FTE/Mt; rated steel capacity; 100 for casting, 120 for hot rolling
+pro_water_price = 2.1 # USD/kL
+pro_labor_price = 28 #60 # $/hour; 28 in Japan
+
+OPEX_process = (pro_electricity_input  * electricity_price_J *1000000  + #electricity was replaced by H2
+            pro_water_input* pro_water_price *1000000 + 
+            pro_labor_input* pro_labor_price*2088) # USD/Mt
+
+#OPEX_transport
+bulk_trans_price <- 23.3 # USD/ton; Pilbara to Japan, only for dry bulk carrier
+OPEX_transport <- bulk_trans_price * 1000000 * steel_conv_factor # USD/Mt; includes transport cost for both HBI
+
+#OPEX_maintainance
+OPEX_maintainance = 0.02*CAPEX # USD/Mt
+
+#OPEX_all
+OPEX = OPEX_DRI + OPEX_EAF + OPEX_electro + OPEX_process + OPEX_maintainance + OPEX_transport # USD/Mt
+
+#————————————————
+  
+#Section 4. Carbon price
+# This part is flexible to consider power system CO2 intensity. Now we assume using green electricity
+electricity_g_J = EAF_electricity_input  + pro_electricity_input # MWh
+carbon_neutral_fatcor = 0 # assume that power sector has been fully decarbonized
+carbon_emission_unit = electricity_g_J * 0.22 # ton CO2 / ton steel
+carbon_uncapture_ratio = 0.4 # CCS uncapture ratio
+Carbon_cost_Mt = carbon_price * carbon_emission_unit * carbon_neutral_fatcor * 1000000 # USD/Mt
+
+#————————————————
+  
+#Section 5. Outputs
+
+M_steel = 1000000 # converter; 1Mt steel per year
+i= 0.07 #discount rate
+N= 20 # year; life time of steel plant(consistent through all plants)
+CRF = (i*(1+i)^N)/((1+i)^N-1)
+
+LCOS =(CAPEX * CRF + OPEX + Carbon_cost_Mt) / (M_steel)
+LCOH = (OPEX_electro + CAP_electro*CRF)/(H2_demand_pre_DRI_effi*1000000)
+
+if(return_value=="LCOS"){
+  return(LCOS) # USD/ton
+  
+}else if(return_value=="cost_composition"){
+  cost_compositon <- data.frame(CAPEX_DRI = CAP_DRI*CRF/(M_steel), 
+                                CAPEX_EAF = CAP_EAF*CRF/(M_steel), 
+                                CAPEX_Electrolyzer = CAP_electro*CRF/(M_steel),
+                                CAPEX_Casting_Rolling = CAP_process*CRF/(M_steel),
+                                OPEX_DRI = OPEX_DRI/M_steel,
+                                OPEX_EAF = OPEX_EAF/M_steel,
+                                OPEX_Electrolyzer = OPEX_electro/M_steel, 
+                                OPEX_Casting_Rolling = OPEX_process/M_steel,
+                                OPEX_Maintainance = OPEX_maintainance/M_steel,
+                                OPEX_Transport = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon) # USD/ton
+  
+}else if(return_value=="cost_items"){
+    cost_compositon <- data.frame(
+                                Steel_plant = (CAP_DRI+ CAP_EAF + CAP_process)*CRF/(M_steel*steel_capacity_factor),
+                                Electrolyzer = CAP_electro*CRF/(M_steel),
+                                Iron_ore = DRI_ore_input* DRI_ore_price*steel_conv_factor,
+                                Flux =  0,
+                                Labor = ((DRI_labor_input* DRI_labor_price*2088)*steel_conv_factor + EAF_labor_input* EAF_labor_price*2088 + ele_labor_input* ele_labor_price*2088 + pro_labor_input* pro_labor_price*2088)/M_steel,
+                                Water = (DRI_water_input* DRI_water_price *1000000*steel_conv_factor + EAF_water_input* EAF_water_price * 1000000 +ele_water_input* ele_water_price +pro_water_input* pro_water_price *1000000)/M_steel,
+                                Electricity = (EAF_electricity_input  * electricity_price_J * 1000000 + ele_electricity_input  * electricity_price_A + pro_electricity_input  * electricity_price_J *1000000 )/M_steel,
+                                Maintainance = OPEX_maintainance/M_steel,
+                                Shipping = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon) #USD/ton
+    
+}else if(return_value== "LCOH"){
+  return(LCOH)  # USD/kg
+}
+}
+
+cost_model_SC2(return_value = "LCOS")
+sum(cost_model_SC2(return_value = "cost_items"))
+cost_model_SC2(return_value = "cost_items")
+```
+
+
+
+##  SC3 Aus(steel), Japan(none)
+note: Australia export steel product directly to Japan
+H2 were only used for DRI, and the EAF, casting and rolling were supported by local electricity
+```{r}
+cost_model_SC3 <- function(
+    H2_prod_eff=20.4, # kg H2/MWh; (Delvin, 2022)
+    ele_water_price=2.1, # USD/kL; (Grattan Institute, 2020)                 
+    CAP_electro_price=1210959, #USD/MW; (Jang,2022)
+    LH2_trans_cost_coeffi=2.1, #USD/kg H2; (Raab, 2021)
+    electro_cap_factor=0.865, #(Thyssenkrupp,2018)
+    electricity_price_J = 188,#$/MWh; (Matsuo, 2021)   
+    electricity_price_A = 59,  #$/MWh; (Lu, 2021)
+    carbon_price = 109.64,  #USD/ton CO2 in EU expected in 2030
+    labor_price_A = 60, # USD/hour; in Australia
+    NG_price =0.0683, # USD/kWh; average LNG import price in 2022 in Japan. [Ministry of Finance, Trade Statistics of Japan, 2023]
+    cokingCoal_price =134.86, #USD/t; Japan coking coal import CIF price; https://ourworldindata.org/grapher/coal-prices
+    scrap_price = 217, #USD/ton, 49140 JPY/ton, i.e. 475.98 USD/ton  # or 217 #USD/ton (statica, 2021)
+    return_value = "LCOS", 
+    Carbon_price_exist = FALSE){
+
+#————————————————
+  
+#Section 1. H2 Electrolyzer capacity assessment
+H2_demand_pre_DRI_effi <- 72 # kg/ton; 1 ton DRI needs 52 kg H2 (Delvin, 2022); 72 kg H2 (Graten, 2020); 102 kg H2 (Gielen, 2021) Here only for pre-DRI
+H2_demand_steel <- H2_demand_pre_DRI_effi  # kg/ton;
+steel_capacity_factor <- 0.89
+steel_capacity <- 115 #ton/hour; Ref: we assume the capacity of steel plant as 1Mt/year with 7/24 running, which equals 115 ton/hour
+H2_capacity <-   steel_capacity* H2_demand_steel / (H2_prod_eff* electro_cap_factor)   # MW; H2 electrolyzer capacity demand to produce 1 Mt/year
+
+#————————————————
+  
+#Section 2. CAPEX
+CAP_DRI = 271000000   # USD/Mt; (hydrogen based) (Vogl, 2018)
+CAP_EAF = 217000000   # USD/Mt;  (Vogl, 2018)
+CAP_electro = CAP_electro_price * H2_capacity  # USD/Mt; 
+CAP_process = (54 + 123)*1000000 # USD/Mt rated steel capacity; casting and hot rolling respectively
+CAPEX = (CAP_DRI + CAP_EAF + CAP_process)/steel_capacity_factor + CAP_electro# USD/Mt
+
+#————————————————
+  
+#Section 3. OPEX
+#OPEX_DRI
+DRI_ore_input = 1.4 # ton/ton;  iron ore demand per tonne DRI
+DRI_water_input = 1.3 # kL/ton; water demand per tonne DRI
+DRI_labor_input = 73 #FTE/Mt; rated DRI capacity (hydrogen based); 1 FTE = 2088 hours
+DRI_ore_price = 100 # USD/t input
+DRI_water_price = 2.1 # USD/kL
+DRI_labor_price = labor_price_A # USD/hour
+steel_conv_factor = 1.17 # 1 ton steel need 1.17 DRI
+OPEX_DRI = (DRI_ore_input  * DRI_ore_price *1000000  + 
+            DRI_water_input* DRI_water_price *1000000+ 
+            DRI_labor_input* DRI_labor_price*2088)*steel_conv_factor # USD/Mt; 
+
+
+#OPEX_EAF
+EAF_electricity_input = 0.43 # MWh; electricity demand per tonne of steel (hot DRI feed)
+EAF_water_input = 1.6 #kL; water demand per tonne of steel
+EAF_labor_input = 167 #FTE/Mt; rated steel capacity
+EAF_water_price = 2.1 # USD/kL
+EAF_labor_price = labor_price_A # USD/hour;
+OPEX_EAF = (EAF_electricity_input  * electricity_price_A * 1000000  + 
+            EAF_water_input* EAF_water_price * 1000000 + 
+            EAF_labor_input* EAF_labor_price*2088) # USD/Mt; 
+
+
+#OPEX_electro
+ele_electricity_input = H2_capacity * electro_cap_factor * 24*365 # MWh; electricity demand per Mt of steel making; 
+ele_water_effi = 0.01 # kL/kg, Litres of water required to produce each kg of H2
+ele_water_input =  ele_water_effi * H2_demand_steel *1000000 # kL/year 
+ele_labor_input = 167 #FTE/Mt; rated steel capacity
+ele_labor_price = labor_price_A # USD/hour;
+OPEX_electro = (ele_electricity_input  * electricity_price_A   + 
+            ele_water_input* ele_water_price + 
+            ele_labor_input* ele_labor_price*2088) # USD/Mt; 
+
+
+#OPEX_process
+pro_electricity_input = 0.12 # MWh; electricity demand per tonne of steel; 0.01 for casting, 0.11 for hot rolling
+pro_water_input = 3.2 #kL/ton; water demand per Mt iron; 1.0 for casting, 2.2 for hot rolling
+pro_labor_input = 220 #FTE/Mt; rated steel capacity; 100 for casting, 120 for hot rolling
+pro_water_price = 2.1 # USD/kL
+pro_labor_price = labor_price_A# USD/hour
+
+OPEX_process = (pro_electricity_input  * electricity_price_A *1000000  + 
+            pro_water_input* pro_water_price *1000000 + 
+            pro_labor_input* pro_labor_price*2088) # USD/Mt; 
+
+
+#OPEX_transport
+trans_price <- 23.3 #23.3 USD/ton Pilbara to Japan
+OPEX_transport <- trans_price * 1000000 # USD/Mt; 
+
+#OPEX_maintainance
+OPEX_maintainance = 0.02*CAPEX # USD/Mt; 
+
+# OPEX_all
+OPEX = OPEX_DRI + OPEX_EAF + OPEX_electro + OPEX_process + OPEX_maintainance + OPEX_transport # USD/Mt; 
+
+
+#————————————————
+  
+#Section 4. Carbon price
+electricity_g_J = EAF_electricity_input  + pro_electricity_input # MWh
+carbon_neutral_fatcor = 0 # assume that power sector has been fully decarbonized
+carbon_emission_unit = electricity_g_J * 0.22 # ton CO2 / ton steel
+carbon_uncapture_ratio = 0.4 # CCS uncapture ratio
+Carbon_cost_Mt = carbon_price * carbon_emission_unit * carbon_neutral_fatcor * 1000000
+
+#————————————————
+  
+#Section 5. Outputs
+
+M_steel = 1000000 # converter; 1Mt steel per year
+i= 0.07 # discount rate
+N= 20 # year; life time of steel plant(consistent through all plants)
+CRF = (i*(1+i)^N)/((1+i)^N-1)
+
+LCOS =(CAPEX * CRF + OPEX + Carbon_cost_Mt) / (M_steel) #USD/ton
+LCOH = (OPEX_electro + CAP_electro*CRF)/(H2_demand_pre_DRI_effi*1000000) # USD/kg
+
+if(return_value=="LCOS"){
+  return(LCOS) # USD/ton
+  
+}else if(return_value=="cost_composition"){
+  cost_compositon <- data.frame(CAPEX_DRI = CAP_DRI*CRF/(M_steel), 
+                                CAPEX_EAF = CAP_EAF*CRF/(M_steel), 
+                                CAPEX_Electrolyzer = CAP_electro*CRF/(M_steel),
+                                CAPEX_Casting_Rolling = CAP_process*CRF/(M_steel),
+                                OPEX_DRI = OPEX_DRI/M_steel,
+                                OPEX_EAF = OPEX_EAF/M_steel,
+                                OPEX_Electrolyzer = OPEX_electro/M_steel, 
+                                OPEX_Casting_Rolling = OPEX_process/M_steel,
+                                OPEX_Maintainance = OPEX_maintainance/M_steel,
+                                OPEX_Transport = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon) #USD/ton
+  
+}else if(return_value=="cost_items"){
+    cost_compositon <- data.frame(
+                                Steel_plant = (CAP_DRI+ CAP_EAF + CAP_process)*CRF/(M_steel*steel_capacity_factor),
+                                Electrolyzer = CAP_electro*CRF/(M_steel),
+                                Iron_ore = DRI_ore_input* DRI_ore_price*steel_conv_factor,
+                                Flux =  0,
+                                Labor = ((DRI_labor_input* DRI_labor_price*2088)*steel_conv_factor + EAF_labor_input* EAF_labor_price*2088 + ele_labor_input* ele_labor_price*2088 + pro_labor_input* pro_labor_price*2088)/M_steel,
+                                Water = (DRI_water_input* DRI_water_price *1000000*steel_conv_factor + EAF_water_input* EAF_water_price * 1000000 +ele_water_input* ele_water_price +pro_water_input* pro_water_price *1000000)/M_steel,
+                                Electricity = (EAF_electricity_input  * electricity_price_A * 1000000 + ele_electricity_input  * electricity_price_A + pro_electricity_input  * electricity_price_A *1000000)/M_steel,
+                                Maintainance = OPEX_maintainance/M_steel,
+                                Shipping = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon) #USD/ton
+    
+}else if(return_value== "LCOH"){
+  return(LCOH) # USD/kg
+}
+}
+
+
+
+cost_model_SC3(return_value = "LCOS")
+sum(cost_model_SC3(return_value = "cost_items"))
+cost_model_SC3(return_value = "cost_items")
+```
+
+
+
+##  SC4: Aus(ore) ,Japan(H2,DRI,EAF,process)
+H2 is only used for DRI, while all energy come from local electricity (did not distinguish renewable or not)
+```{r}
+cost_model_SC4 <- function(
+    H2_prod_eff=20.4,# kg H2/MWh; (Delvin, 2022)
+    ele_water_price=2.1, # USD/kL; (Grattan Institute, 2020)                 
+    CAP_electro_price=1210959, #USD/MW; (Jang,2022)
+    LH2_trans_cost_coeffi=2.1, #USD/kg H2; (Raab, 2021)
+    electro_cap_factor=0.865, #(Thyssenkrupp,2018)
+    electricity_price_J = 188,#$/MWh; (Matsuo, 2021)   
+    electricity_price_A = 59,  #$/MWh; (Lu, 2021)
+    carbon_price = 109.64,  #USD/ton CO2 in EU expected in 2030
+    labor_price_A = 60, # USD/hour; in Australia
+    NG_price =0.0683, # USD/kWh; average LNG import price in 2022 in Japan. [Ministry of Finance, Trade Statistics of Japan, 2023]
+    cokingCoal_price =134.86, #USD/t; Japan coking coal import CIF price; https://ourworldindata.org/grapher/coal-prices
+    scrap_price = 217, #USD/ton, 49140 JPY/ton, i.e. 475.98 USD/ton
+    return_value = "LCOS", 
+    Carbon_price_exist = FALSE){
+  
+#————————————————
+  
+#Section 1. H2 electrolyzer capacity assessment
+
+H2_demand_pre_DRI_effi <- 72 # kg/ton; 1 ton DRI needs 52 kg H2 (Delvin, 2022); 72 kg H2 (Graten, 2020); 102 kg H2 (Gielen, 2021) Here only for pre-DRI
+H2_demand_steel <- H2_demand_pre_DRI_effi # kg/ton;
+steel_capacity_factor <- 0.89
+steel_capacity <- 115 # ton/hour; 1 ton steel production per hour; we set 1Mt/year in this study, which equals 115 ton/hour
+H2_capacity <-   steel_capacity*H2_demand_steel / (H2_prod_eff * electro_cap_factor)  # MW; H2 electrolyzer capacity demand to produce 1 Mt/year
+
+#————————————————
+  
+#Section 2. CAPEX
+
+#CAPEX
+CAP_DRI = 271000000   # USD/Mt; (hydrogen based) (Vogl, 2018)
+CAP_EAF = 217000000   # USD/Mt;(Vogl, 2018)
+CAP_electro = CAP_electro_price * H2_capacity  # USD/Mt;
+CAP_process = (54 + 123)*1000000 # USD/Mt; rated steel capacity; casting and hot rolling respectively
+CAPEX = (CAP_DRI + CAP_EAF + CAP_process)/steel_capacity_factor + CAP_electro# USD/Mt
+
+#————————————————
+  
+#Section 3. OPEX
+#OPEX_DRI
+DRI_ore_input = 1.4 # ton/ton; iron ore demand per tonne DRI
+DRI_water_input = 1.3 #kL/ton; water demand per tonne DRI
+DRI_labor_input = 73 #FTE/Mt; rated DRI capacity (hydrogen based); 1 FTE = 2088 hours
+DRI_ore_price = 100 # USD/t;
+DRI_water_price = 2.1 # USD/kL;
+DRI_labor_price = 28 # USD/hour; 
+steel_conv_factor = 1.17 # 1 ton steel need 1.17 DRI
+OPEX_DRI = (DRI_ore_input  * DRI_ore_price *1000000  + 
+            DRI_water_input* DRI_water_price *1000000+ 
+            DRI_labor_input* DRI_labor_price*2088)*steel_conv_factor # USD/Mt;
+
+
+#OPEX_EAF
+EAF_electricity_input = 0.43 #MWh/ton; electricity demand per tonne of steel (hot DRI feed)
+EAF_water_input = 1.6 #kL/ton; water demand per tonne of steel
+EAF_labor_input = 167 #FTE/Mt; rated steel capacity
+EAF_water_price = 2.1 # USD/kL
+EAF_labor_price = 28 # USD/hour; 
+
+OPEX_EAF = (EAF_electricity_input  * electricity_price_J * 1000000  +
+            EAF_water_input* EAF_water_price * 1000000 + 
+            EAF_labor_input* EAF_labor_price*2088) # USD/Mt;
+
+
+#OPEX_electro
+ele_electricity_input = H2_capacity * electro_cap_factor* 24*365 # MWh/Mt; electricity demand per Mt steel making;
+ele_water_effi = 0.01 # kL/kg, Litres of water required to produce each kg of H2
+ele_water_input =  ele_water_effi * H2_demand_steel *1000000 # kL/year 
+ele_labor_input = 167 #FTE/Mt; rated steel capacity
+ele_labor_price = 28 # USD/hour
+OPEX_electro = (ele_electricity_input  * electricity_price_J   + 
+            ele_water_input* ele_water_price + 
+            ele_labor_input* ele_labor_price*2088) # USD/Mt;
+
+
+#OPEX_process
+pro_electricity_input = 0.12 # MWh/ton; electricity demand for casting and rolling; 0.01 for casting, 0.11 for hot rolling (Delvin, same as in Gratten)
+pro_water_input = 3.2 #kL/ton; water demand per Mt iron; 1.0 for casting, 2.2 for hot rolling
+pro_labor_input = 220 #FTE/Mt; rated steel capacity; 100 for casting, 120 for hot rolling
+pro_water_price = 2.1 # USD/kL
+pro_labor_price = 28# USD/hour
+OPEX_process = (pro_electricity_input  * electricity_price_J *1000000  +
+            pro_water_input* pro_water_price *1000000 + 
+            pro_labor_input* pro_labor_price*2088) # USD/Mt;
+
+
+#OPEX_transport
+bulk_trans_price <- 23.3 #23.3 USD/ton Pilbara to Japan, only for dry bulk carrier
+ore_DRI_conv <- 1.5 # ton/ton; 1.5 kg ore per kg DRI-steel (Devlin,2022)
+OPEX_transport <- bulk_trans_price * 1000000 * ore_DRI_conv  # USD/Mt; only transport iron ore from AUS
+
+#OPEX_maintainance
+OPEX_maintainance = 0.02*CAPEX
+
+#OPEX_all
+OPEX = OPEX_DRI + OPEX_EAF + OPEX_electro + OPEX_process + OPEX_maintainance + OPEX_transport
+
+#————————————————
+  
+#Section 4. Carbon price
+electricity_g_J = EAF_electricity_input  + pro_electricity_input # MWh
+carbon_neutral_fatcor = 0 # assume that power sector has been fully decarbonized
+carbon_emission_unit = electricity_g_J * 0.22 # ton CO2 / ton steel
+carbon_uncapture_ratio = 0.4 # CCS uncapture ratio
+Carbon_cost_Mt = carbon_price * carbon_emission_unit * carbon_neutral_fatcor * 1000000
+
+
+#————————————————
+  
+#Section 5. Outputs
+M_steel = 1000000 #1Mt steel per year
+i= 0.07 #discount rate
+N= 20 #life time of steel plant(consistent through all plants)
+CRF = (i*(1+i)^N)/((1+i)^N-1)
+
+LCOS =(CAPEX * CRF + OPEX + Carbon_cost_Mt) / (M_steel)
+LCOH = (OPEX_electro + CAP_electro*CRF)/(H2_demand_pre_DRI_effi*1000000)
+
+if(return_value=="LCOS"){
+  return(LCOS) # USD/ton
+  
+}else if(return_value=="cost_composition"){
+  cost_compositon <- data.frame(CAPEX_DRI = CAP_DRI*CRF/(M_steel), 
+                                CAPEX_EAF = CAP_EAF*CRF/(M_steel), 
+                                CAPEX_Electrolyzer = CAP_electro*CRF/(M_steel),
+                                CAPEX_Casting_Rolling = CAP_process*CRF/(M_steel),
+                                OPEX_DRI = OPEX_DRI/M_steel,
+                                OPEX_EAF = OPEX_EAF/M_steel,
+                                OPEX_Electrolyzer = OPEX_electro/M_steel, 
+                                OPEX_Casting_Rolling = OPEX_process/M_steel,
+                                OPEX_Maintainance = OPEX_maintainance/M_steel,
+                                OPEX_Transport = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon) # USD/ton
+  
+}else if(return_value=="cost_items"){
+    cost_compositon <- data.frame(
+                                Steel_plant = (CAP_DRI+ CAP_EAF + CAP_process)*CRF/M_steel,
+                                Electrolyzer = CAP_electro*CRF/(M_steel),
+                                Iron_ore = DRI_ore_input* DRI_ore_price*steel_conv_factor,
+                                Flux =  0,
+                                Labor = ((DRI_labor_input* DRI_labor_price*2088)*steel_conv_factor + EAF_labor_input* EAF_labor_price*2088 + ele_labor_input* ele_labor_price*2088 + pro_labor_input* pro_labor_price*2088)/M_steel,
+                                Water = (DRI_water_input* DRI_water_price *1000000 * steel_conv_factor + EAF_water_input* EAF_water_price * 1000000 + ele_water_input* ele_water_price + pro_water_input* pro_water_price *1000000)/M_steel,
+                                Electricity = (EAF_electricity_input  * electricity_price_J * 1000000 + ele_electricity_input  * electricity_price_J + pro_electricity_input  * electricity_price_J *1000000)/M_steel,
+                                Maintainance = OPEX_maintainance/M_steel,
+                                Shipping = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon) # USD/ton
+    
+}else if(return_value== "LCOH"){
+  return(LCOH) #USD/kg
+}
+}
+
+cost_model_SC4(return_value = "LCOS")
+cost_model_SC4(return_value = "cost_items")
+
+```
+
+##  SC5: Japan(BF-BOF, CCS, process)
+note: we assume using TGR-BF + CCS, and most assumptions refers to (C. Richardson-Barlow et al., 2020)  https://doi.org/10.1016/j.enpol.2022.113100
+```{r}
+cost_model_SC5 <- function(
+    H2_prod_eff=20.4,# kg H2/MWh; (Delvin, 2022)
+    ele_water_price=2.1, # USD/kL; (Grattan Institute, 2020)                 
+    CAP_electro_price=1210959, #USD/MW; (Jang,2022)
+    LH2_trans_cost_coeffi=2.1, #USD/kg H2; (Raab, 2021)
+    electro_cap_factor=0.865, #(Thyssenkrupp,2018)
+    electricity_price_J = 188,#$/MWh; (Matsuo, 2021)   
+    electricity_price_A = 59,  #$/MWh; (Lu, 2021)
+    carbon_price = 109.64,  #USD/ton CO2 in EU expected in 2030
+    labor_price_A = 60, # USD/hour; in Australia
+    NG_price =0.0683, # USD/kWh; average LNG import price in 2022 in Japan. [Ministry of Finance, Trade Statistics of Japan, 2023]
+    cokingCoal_price =134.86, #USD/t; Japan coking coal import CIF price; https://ourworldindata.org/grapher/coal-prices
+    scrap_price = 217, #USD/ton, 49140 JPY/ton, i.e. 475.98 USD/ton
+    return_value = "LCOS", 
+    Carbon_price_exist = FALSE){
+
+#————————————————
+  
+#Section 1. CAPEX
+PoundToUSD = 1.28 # Average exchange rate in 2020:1 Pound =1.2837 USD.
+steel_capacity_factor <- 0.89
+steel_capacity <- 115 # ton/hour; 1 ton steel production per hour; we set 1Mt/year in this study, which equals 115 ton/hour
+CAP_BF_BOF_CCS = 645.5*1000000 # USD/Mt; CAPEX for BF-BOF+CCS （Fischedick, 2014）
+CAP_process = (54 + 123)*1000000 # USD/Mt; casting and hot rolling respectively
+CAPEX = CAP_BF_BOF_CCS/steel_capacity_factor + CAP_process
+
+#————————————————
+  PoundToUSD
+#Section 2. OPEX
+#OPEX_BF_BOF (TGR-BF + CCS)
+input_electricity = 0.345 #MWh/tCS ; electricity used for CCS
+input_cokingCoal =  0.48 #t/tCS ; 0.1 ton coal was saved compared to BF-BOF-CCS, because of reduced coke consumption due to top gas recycling; 4011*0.00012 converting kWh to tce (original: 4011kWh/tCS)
+input_naturalGas = 1231 #kWh/tCS
+input_ore = 1.1881 # t/tCS
+input_oxygen = 298.3/508.6 #t/tCS converting Nm3 to ton (original: 472.61Nm3/tCS)
+input_scrap = 0.1166 #t/tCS
+input_flux = 0.0355 # t/tCS
+price_electricity = electricity_price_J # $/MWh
+price_cokingCoal = cokingCoal_price #USD/t; Japan coking coal import CIF price; https://ourworldindata.org/grapher/coal-prices
+price_naturalGas = NG_price # USD/kWh; average LNG import price in 2022 in Japan. [Ministry of Finance, Trade Statistics of Japan, 2023]
+price_ore = 100 #USD/t
+price_oxygen = 66.56 #USD/t
+price_scrap = scrap_price #USD/ton, 49140 JPY/ton, i.e. 475.98 USD/ton
+price_flux = 35.82 # USD/ton
+cost_labor = 43.36 # USD/ton (Manfred Fischedick, 2014)
+cost_OPEX_fixed = 25.6# USD/tCS/yr
+OPEX_BF_BOF = (input_electricity*price_electricity +
+  input_cokingCoal*price_cokingCoal+
+  input_naturalGas*price_naturalGas+
+  input_ore*price_ore+
+  input_oxygen*price_oxygen+
+  input_scrap*price_scrap+
+  input_flux*price_flux +
+  cost_labor
+  )*1000000 # USD/Mt
+  
+#OPEX_process
+pro_electricity_input = 0.12 # MWh/ton; electricity demand per tonne of steel; 0.01 for casting, 0.11 for hot rolling (Delvin, same as in Gratten)
+pro_water_input = 3.2 #kL/ton; water demand per Mt iron; 1.0 for casting, 2.2 for hot rolling
+pro_labor_input = 220 #FTE/Mt; rated steel capacity; 100 for casting, 120 for hot rolling
+pro_electricity_price = electricity_price_J # USD/MWh
+pro_water_price = 2.1 # USD/kL
+pro_labor_price = 28# USD/hour
+OPEX_process = (pro_electricity_input  * pro_electricity_price *1000000  + #test processing use electricity rather than H2
+            pro_water_input* pro_water_price *1000000 + 
+            pro_labor_input* pro_labor_price*2088) # USD/Mt
+
+#OPEX_transport
+bulk_trans_price <- 23.3 #23.3 USD/ton Pilbara to Japan, only for dry bulk carrier
+OPEX_transport <- bulk_trans_price * 1000000 * input_ore # USD/Mt; the iron ore transport cost
+
+#OPEX_maintainance
+OPEX_maintainance = 0.02*CAPEX + cost_OPEX_fixed# USD/Mt
+
+# OPEX_all
+OPEX = OPEX_BF_BOF + OPEX_process + OPEX_maintainance + OPEX_transport # USD/Mt
+
+#————————————————
+  
+#Section 3. Carbon price
+if (Carbon_price_exist == TRUE){
+  carbon_emission_unit = 2.3 # ton CO2 / ton steel
+carbon_uncapture_ratio = 0.4 #CCS uncapture rate
+Carbon_cost_Mt = carbon_price * carbon_emission_unit * carbon_uncapture_ratio * 1000000
+} else{
+  Carbon_cost_Mt =0
+}
+
+#————————————————
+  
+#Section 4. Outputs
+
+M_steel = 1000000 #1Mt steel per year
+i= 0.07 #discount rate
+N= 20 #life time of steel plant(consistent through all plants)
+CRF = (i*(1+i)^N)/((1+i)^N-1)
+
+LCOS =(CAPEX * CRF + OPEX + Carbon_cost_Mt) / (M_steel)
+
+if(return_value=="LCOS"){
+  return(LCOS) # USD/ton
+  
+}else if(return_value=="cost_composition"){
+  cost_compositon <- data.frame(CAPEX_TFR_BF_CCS= CAP_BF_BOF_CCS*CRF/(M_steel), 
+                                CAPEX_Casting_Rolling= CAP_process*CRF/(M_steel),
+                                OPEX_BF_BOF= OPEX_BF_BOF/M_steel,
+                                OPEX_Casting_Rolling = OPEX_process/M_steel,
+                                OPEX_Maintainance= OPEX_maintainance/M_steel,
+                                OPEX_Transport = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon) # USD/ton
+  
+}else if(return_value=="cost_items"){
+    cost_compositon <- data.frame(
+                                Steel_plant = (CAP_BF_BOF_CCS/steel_capacity_factor+ CAP_process)*CRF/M_steel,
+                                Electrolyzer = 0,
+                                Iron_ore = input_ore*price_ore,
+                                Flux =  input_flux*price_flux,
+                                Coal = input_cokingCoal*price_cokingCoal,
+                                Oxygen =  input_oxygen*price_oxygen,
+                                Gas_cost = input_naturalGas*price_naturalGas,
+                                Scrap = input_scrap * price_scrap,
+                                Labor = cost_labor + (pro_labor_input* pro_labor_price*2088)/M_steel,
+                                Water = pro_water_input* pro_water_price,
+                                Electricity = input_electricity*price_electricity + pro_electricity_input  * pro_electricity_price,
+                                Maintainance = OPEX_maintainance/M_steel,
+                                Shipping = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon)# USD/ton
+}
+}
+
+cost_model_SC5(return_value = "LCOS")
+cost_model_SC5(return_value = "cost_items")/sum(cost_model_SC5(return_value = "cost_items"))
+
+```
+
+##  SC6: Scrap-EAF Japan(scrap-EAF, renewable electricity)
+
+```{r}
+cost_model_SC6 <-function(
+    H2_prod_eff=20.4,# kg H2/MWh; (Delvin, 2022)
+    ele_water_price=2.1, # USD/kL; (Grattan Institute, 2020)                 
+    CAP_electro_price=1210959, #USD/MW; (Jang,2022)
+    LH2_trans_cost_coeffi=2.1, #USD/kg H2; (Raab, 2021)
+    electro_cap_factor=0.865, #(Thyssenkrupp,2018)
+    electricity_price_J = 188,#$/MWh; (Matsuo, 2021)   
+    electricity_price_A = 59,  #$/MWh; (Lu, 2021)
+    carbon_price = 109.64,  #USD/ton CO2 in EU expected in 2030
+    labor_price_A = 60, # USD/hour; in Australia
+    NG_price =0.0683, # USD/kWh; average LNG import price in 2022 in Japan. [Ministry of Finance, Trade Statistics of Japan, 2023]
+    cokingCoal_price =134.86, #USD/t; Japan coking coal import CIF price; https://ourworldindata.org/grapher/coal-prices
+    scrap_price = 217, #USD/ton, 49140 JPY/ton, i.e. 475.98 USD/ton
+    return_value = "LCOS", 
+    Carbon_price_exist = FALSE){
+
+#————————————————
+  
+#Section 1. CAPEX
+steel_capacity_factor <- 0.89
+CAP_EAF = 217000000  # USD/Mt;(Vogl, 2018)
+CAP_process = (54 + 123)*1000000 # USD/Mt; rated steel capacity; casting and hot rolling respectively
+CAPEX = (CAP_EAF + CAP_process)/steel_capacity_factor # USD/Mt
+
+#————————————————
+  
+#Section 2. OPEX
+#OPEX_EAF
+EAF_electricity_input = 0.5194 #MWh/ton; electricity demand per tonne of steel (hot DRI feed)
+EAF_water_input = 1.6 #kL/ton; water demand per tonne of steel
+EAF_labor_input = 167 #FTE/Mt; rated steel capacity
+EAF_scrap_input = 1.04 #ton/ton, (T. Kuramochi, 2016)
+EAF_water_price = 2.1 # USD/kL
+EAF_labor_price = 28 # $/hour; 28 in Japan
+EAF_scrap_price =  scrap_price #USD/ton, 49140 JPY/ton, i.e. 475.98 USD/ton
+OPEX_EAF = (
+  EAF_electricity_input  * electricity_price_J * 1000000  +
+            EAF_water_input* EAF_water_price * 1000000 + 
+            EAF_labor_input* EAF_labor_price*2088+
+            EAF_scrap_input * EAF_scrap_price * 1000000
+  ) #USD/Mt
+
+
+#OPEX_process
+pro_electricity_input = 0.12 # MWh/ton; electricity demand per tonne of steel; 0.01 for casting, 0.11 for hot rolling (Delvin, same as in Gratten)
+pro_water_input = 3.2 #kL/ton; water demand per Mt iron; 1.0 for casting, 2.2 for hot rolling
+pro_labor_input = 220 #FTE/Mt rated steel capacity; 100 for casting, 120 for hot rolling
+pro_water_price = 2.1 # USD/kL
+pro_labor_price = 28# USD/hour;
+OPEX_process = (pro_electricity_input  * electricity_price_J *1000000  +
+            pro_water_input* pro_water_price *1000000 + 
+            pro_labor_input* pro_labor_price*2088) #USD/Mt
+
+# OPEX_transport
+OPEX_transport <- 0 # assume the cost has been included in the scrap price
+
+#OPEX_maintainance
+OPEX_maintainance = 0.02*CAPEX #USD/Mt
+
+# OPEX_all
+OPEX = OPEX_EAF + OPEX_process + OPEX_maintainance
+  
+#————————————————
+  
+#Section 3. Carbon price
+# This part is flexible to consider power system CO2 intensity. Now we assume using green electricity
+electricity_g_J = EAF_electricity_input  + pro_electricity_input # MWh
+carbon_neutral_fatcor = 0 # assume that power sector has been fully decarbonized
+carbon_emission_unit = electricity_g_J * 0.22 # ton CO2 / ton steel
+carbon_uncapture_ratio = 0.4 # CCS uncapture ratio
+Carbon_cost_Mt = carbon_price * carbon_emission_unit * carbon_neutral_fatcor * 1000000 # USD/Mt
+
+#————————————————
+  
+#Section 4. Outputs
+
+M_steel = 1000000 #1Mt steel per year
+i= 0.07 #discount rate
+N= 20 #life time of steel plant(consistent through all plants)
+CRF = (i*(1+i)^N)/((1+i)^N-1)
+
+LCOS =(CAPEX * CRF + OPEX + Carbon_cost_Mt) / (M_steel)
+
+if(return_value=="LCOS"){
+  return(LCOS) # USD/ton
+}else if(return_value=="cost_composition"){
+  cost_compositon <- data.frame(CAPEX_EAF = CAP_EAF*CRF/(M_steel), 
+                                CAPEX_Casting_Rolling = CAP_process*CRF/(M_steel),
+                                OPEX_EAF = OPEX_EAF/M_steel,
+                                OPEX_Casting_Rolling = OPEX_process/M_steel,
+                                OPEX_Maintainance = OPEX_maintainance/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon)# USD/ton
+  
+}else if(return_value=="cost_items"){
+    cost_compositon <- data.frame(
+                                Steel_plant = (CAP_EAF + CAP_process)*CRF/(M_steel*steel_capacity_factor),
+                                Electrolyzer = 0,
+                                Iron_ore = 0,
+                                Flux =  0,
+                                Scrap = EAF_scrap_input * EAF_scrap_price,
+                                Labor = (EAF_labor_input* EAF_labor_price*2088 + pro_labor_input* pro_labor_price*2088)/M_steel,
+                                Water = EAF_water_input* EAF_water_price + pro_water_input* pro_water_price,
+                                Electricity = EAF_electricity_input  * electricity_price_J + pro_electricity_input  * electricity_price_J,
+                                Maintainance = OPEX_maintainance/M_steel,
+                                Shipping = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon) # USD/ton
+}
+}
+
+cost_model_SC6(return_value = "LCOS")
+sum(cost_model_SC6(return_value = "cost_items"))
+cost_model_SC6(return_value = "cost_items")
+```
+
+
+##  SC7: Aus(ore) ,Japan(NG,DRI,EAF,process)
+note: Australia provides iron ore to Japan, then Japan import gas to produce DRI-EAF together with casting & rolling were carried in Japan.
+```{r}
+cost_model_SC7 <- function(
+    H2_prod_eff=20.4,# kg H2/MWh; (Delvin, 2022)
+    ele_water_price=2.1, # USD/kL; (Grattan Institute, 2020)                 
+    CAP_electro_price=1210959, #USD/MW; (Jang,2022)
+    LH2_trans_cost_coeffi=2.1, #USD/kg H2; (Raab, 2021)
+    electro_cap_factor=0.865, #(Thyssenkrupp,2018)
+    electricity_price_J = 188,#$/MWh; (Matsuo, 2021)   
+    electricity_price_A = 59,  #$/MWh; (Lu, 2021)
+    carbon_price = 109.64,  #USD/ton CO2 in EU expected in 2030
+    labor_price_A = 60, # USD/hour; in Australia
+    NG_price =0.0683, # USD/kWh; average LNG import price during 2018-2022 (5 years) in Japan. [Ministry of Finance, Trade Statistics of Japan, 2023]
+    cokingCoal_price =134.86, #USD/t; Japan coking coal import CIF price; https://ourworldindata.org/grapher/coal-prices
+    scrap_price = 217, #USD/ton, 49140 JPY/ton, i.e. 475.98 USD/ton
+    return_value = "LCOS", 
+    Carbon_price_exist = FALSE){
+  
+#————————————————
+  
+#Section 1. CAPEX
+steel_capacity_factor <- 0.89
+steel_capacity <- 115 # ton/hour; 1 ton steel production per hour; we set 1Mt/year in this study, which equals 115 ton/hour
+CAP_DRI = 271000000   # USD/Mt; (hydrogen based) (Vogl, 2018)
+CAP_EAF = 217000000   # USD/Mt; (Vogl, 2018)
+CAP_process = (54 + 123)*1000000 # USD/Mt rated steel capacity; casting and hot rolling respectively
+CAPEX = (CAP_DRI+ CAP_EAF + CAP_process)/steel_capacity_factor
+
+#————————————————
+  
+#Section 2. OPEX
+
+#OPEX_DRI
+DRI_ore_input = 1.4 # tonne/ton; iron ore per tonne DRI
+DRI_water_input = 1.3 # kL/ton; water demand per tonne DRI
+DRI_labor_input = 73 #FTE/Mt; rated DRI capacity (hydrogen based); 1 FTE = 2088 hours
+DRI_NG_input = 9.9 # GJ/ton; 1 ton DRI needs 9.9 GJ natural gas (Graten, 2020)
+DRI_ore_price = 100 # USD/t input
+DRI_water_price = 2.1 # USD/kL
+DRI_labor_price = 28 # USD/hour
+DRI_NG_price = NG_price
+Converter_GJ_to_kWh <- 277.78  # 1GJ = 277.78 kWh
+steel_conv_factor = 1.17 #1 ton steel need 1.17 DRI
+OPEX_DRI = (DRI_ore_input  * DRI_ore_price *1000000  + 
+            DRI_water_input* DRI_water_price *1000000+ 
+            DRI_labor_input* DRI_labor_price*2088+
+            DRI_NG_input * DRI_NG_price * Converter_GJ_to_kWh * 1000000 )*steel_conv_factor # USD/Mt
+
+
+#OPEX_EAF
+EAF_electricity_input = 0.43 #MWh/ton; electricity demand per tonne of steel (hot DRI feed)
+EAF_water_input = 1.6 #kL/ton; water demand per tonne of steel
+EAF_labor_input = 167 #FTE/Mt; rated steel capacity
+EAF_water_price = 2.1 # USD/kL
+EAF_labor_price = 28 # $/hour; 
+OPEX_EAF = (EAF_electricity_input  * electricity_price_J * 1000000  + 
+            EAF_water_input* EAF_water_price * 1000000 + 
+            EAF_labor_input* EAF_labor_price*2088) # USD/Mt
+
+
+#OPEX_process
+pro_electricity_input = 0.12 #MWh/ton; MWh per tonne of steel; 0.01 for casting, 0.11 for hot rolling
+pro_water_input = 3.2 #kL/ton; water demand per Mt iron; 1.0 for casting, 2.2 for hot rolling
+pro_labor_input = 220 #FTE/Mt; rated steel capacity; 100 for casting, 120 for hot rolling
+pro_water_price = 2.1 # USD/kL
+pro_labor_price = 28 # $/hour
+OPEX_process = (pro_electricity_input  * electricity_price_J *1000000  + 
+            pro_water_input* pro_water_price *1000000 + 
+            pro_labor_input* pro_labor_price*2088) # USD/Mt
+
+#OPEX_transport
+bulk_trans_price <- 23.3 #23.3 USD/ton; Pilbara to Japan, only for dry bulk carrier
+ore_DRI_conv <- 1.5 # ton/ton; 1.5 kg ore per kg DRI-steel (Devlin,2022)
+OPEX_transport <- bulk_trans_price * 1000000 * ore_DRI_conv  # USD/Mt; only transport iron ore from AUS
+
+#OPEX_maintainance
+OPEX_maintainance = 0.02*CAPEX # USD/Mt
+
+# OPEX_all
+OPEX = OPEX_DRI + OPEX_EAF  + OPEX_process + OPEX_transport + OPEX_maintainance # USD/Mt
+
+#————————————————
+  
+#Section 3. Carbon Price
+if(Carbon_price_exist == TRUE){
+  electricity_g_J = EAF_electricity_input  + pro_electricity_input
+  NG_CO2 = 52.991 # g/MJ
+  carbon_emission_unit = electricity_g_J * 0.22 + NG_CO2 * DRI_NG_input * steel_conv_factor *0.001# ton CO2 / ton steel
+  Carbon_cost_Mt = carbon_price * carbon_emission_unit  * 1000000 # USD/Mt
+} else{
+  Carbon_cost_Mt =0
+}
+
+#————————————————
+  
+#Section 4. Outputs
+
+M_steel = 1000000 #1Mt steel per year
+i= 0.07 #discount rate
+N= 20 #life time of steel plant(consistent through all plants)
+CRF = (i*(1+i)^N)/((1+i)^N-1)
+LCOS =(CAPEX * CRF + OPEX + Carbon_cost_Mt) / (M_steel)
+
+if(return_value=="LCOS"){
+  return(LCOS) # USD/ton
+  
+}else if(return_value=="cost_composition"){
+  cost_compositon <- data.frame(CAPEX_DRI = CAP_DRI*CRF/(M_steel*steel_capacity_factor), 
+                                CAPEX_EAF = CAP_EAF*CRF/(M_steel*steel_capacity_factor), 
+                                CAPEX_Casting_Rolling = CAP_process*CRF/(M_steel*steel_capacity_factor),
+                                OPEX_DRI = OPEX_DRI/M_steel,
+                                OPEX_EAF = OPEX_EAF/M_steel,
+                                OPEX_Casting_Rolling = OPEX_process/M_steel,
+                                OPEX_Maintainance = OPEX_maintainance/M_steel,
+                                OPEX_Transport = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon) # USD/ton
+  
+}else if(return_value=="cost_items"){
+    cost_compositon <- data.frame(
+                                Steel_plant = CAPEX * CRF/M_steel,
+                                Electrolyzer = 0,
+                                Iron_ore = DRI_ore_input* DRI_ore_price*steel_conv_factor,
+                                Flux =  0,
+                                Gas_cost = DRI_NG_input * DRI_NG_price * Converter_GJ_to_kWh*steel_conv_factor,
+                                Labor = (DRI_labor_input* DRI_labor_price*2088*steel_conv_factor + 
+                                           EAF_labor_input* EAF_labor_price*2088 +
+                                           pro_labor_input* pro_labor_price*2088)/M_steel,
+                                Water = DRI_water_input* DRI_water_price*steel_conv_factor + EAF_water_input* EAF_water_price +  pro_water_input* pro_water_price,
+                                Electricity = EAF_electricity_input  * electricity_price_J + pro_electricity_input  * electricity_price_J,
+                                Maintainance = OPEX_maintainance/M_steel,
+                                Shipping = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon) # USD/ton
+    
+}
+}
+
+cost_model_SC7(return_value = "LCOS")
+sum(cost_model_SC7(return_value = "cost_items"))
+cost_model_SC7(return_value = "cost_items")
+
+```
+
+##  SC8: Japan(BF-BOF, process)
+This is used for validation
+```{r}
+cost_model_SC8 <- function(
+    H2_prod_eff=20.4,# kg H2/MWh; (Delvin, 2022)
+    ele_water_price=2.1, # USD/kL; (Grattan Institute, 2020)                 
+    CAP_electro_price=1210959, #USD/MW; (Jang,2022)
+    LH2_trans_cost_coeffi=2.1, #USD/kg H2; (Raab, 2021)
+    electro_cap_factor=0.865, #(Thyssenkrupp,2018)
+    electricity_price_J = 188,#$/MWh; (Matsuo, 2021)   
+    electricity_price_A = 59,  #$/MWh; (Lu, 2021)
+    carbon_price = 109.64,  #USD/ton CO2 in EU expected in 2030
+    labor_price_A = 60, # USD/hour; in Australia
+    NG_price =0.0683, # USD/kWh; average LNG import price in 2022 in Japan. [Ministry of Finance, Trade Statistics of Japan, 2023]
+    cokingCoal_price =134.86, #USD/t; Japan coking coal import CIF price; https://ourworldindata.org/grapher/coal-prices
+    scrap_price = 217, #USD/ton, 49140 JPY/ton, i.e. 475.98 USD/ton
+    return_value = "LCOS", 
+    Carbon_price_exist = FALSE){
+
+#————————————————
+  
+#Section 1. CAPEX
+steel_capacity_factor <- 0.89
+steel_capacity <- 115 # ton/hour; 1 ton steel production per hour; we set 1Mt/year in this study, which equals 115 ton/hour
+CAP_BF_BOF = 504.3*1000000 # USD/Mt; （Fischedick, 2014）
+CAP_process = (54 + 123)*1000000 # USD/Mt; casting and hot rolling respectively
+CAPEX = CAP_BF_BOF/steel_capacity_factor + CAP_process
+
+#————————————————
+#Section 2. OPEX
+#OPEX_BF_BOF (TGR-BF + CCS)
+input_electricity = 0 #MWh/tCS; all energy was through natural gas.
+input_cokingCoal =  0.58#t/tCS ; 4011*0.00012 converting kWh to tce (original: 4011kWh/tCS)
+input_naturalGas = 1231 #kWh/tCS
+input_ore = 1.1881 # t/tCS
+input_oxygen = 298.3/508.6 #t/tCS converting Nm3 to ton (original: 472.61Nm3/tCS)
+input_scrap = 0.1166 #t/tCS
+input_flux = 0.0355 # t/tCS
+price_electricity = electricity_price_J # $/MWh
+price_cokingCoal = cokingCoal_price #USD/t; Japan coking coal import CIF price; https://ourworldindata.org/grapher/coal-prices
+price_naturalGas = NG_price # USD/kWh; average LNG import price in 2022 in Japan. [Ministry of Finance, Trade Statistics of Japan, 2023]
+price_ore = 100 #USD/t
+price_oxygen = 66.56 #USD/t
+price_scrap = scrap_price #USD/ton, 49140 JPY/ton, i.e. 475.98 USD/ton
+price_flux = 35.82 # USD/ton
+cost_labor = 43.36 # USD/ton (Manfred Fischedick, 2014)
+cost_OPEX_fixed = 25.6# USD/tCS/yr
+OPEX_BF_BOF = (input_electricity*price_electricity +
+  input_cokingCoal*price_cokingCoal+
+  input_naturalGas*price_naturalGas+
+  input_ore*price_ore+
+  input_oxygen*price_oxygen+
+  input_scrap*price_scrap+
+  input_flux*price_flux +
+  cost_labor
+  )*1000000 # USD/Mt
+  
+#OPEX_process
+pro_electricity_input = 0.12 # MWh/ton; electricity demand per tonne of steel; 0.01 for casting, 0.11 for hot rolling (Delvin, same as in Gratten)
+pro_water_input = 3.2 #kL/ton; water demand per Mt iron; 1.0 for casting, 2.2 for hot rolling
+pro_labor_input = 220 #FTE/Mt; rated steel capacity; 100 for casting, 120 for hot rolling
+pro_electricity_price = electricity_price_J # USD/MWh
+pro_water_price = 2.1 # USD/kL
+pro_labor_price = 28# USD/hour
+OPEX_process = (pro_electricity_input  * pro_electricity_price *1000000  + #test processing use electricity rather than H2
+            pro_water_input* pro_water_price *1000000 + 
+            pro_labor_input* pro_labor_price*2088) # USD/Mt
+
+#OPEX_transport
+bulk_trans_price <- 23.3 #23.3 USD/ton Pilbara to Japan, only for dry bulk carrier
+OPEX_transport <- bulk_trans_price * 1000000 * input_ore # USD/Mt; the iron ore transport cost
+
+#OPEX_maintainance
+OPEX_maintainance = 0.02*CAPEX + cost_OPEX_fixed# USD/Mt
+
+# OPEX_all
+OPEX = OPEX_BF_BOF + OPEX_process + OPEX_maintainance + OPEX_transport # USD/Mt
+
+#————————————————
+  
+#Section 3. Carbon price
+if (Carbon_price_exist == TRUE){
+  carbon_emission_unit = 2.3 # ton CO2 / ton steel
+carbon_uncapture_ratio = 1 #CCS uncapture rate; here BF_BOF has no CO2 capture
+Carbon_cost_Mt = carbon_price * carbon_emission_unit * carbon_uncapture_ratio * 1000000
+} else{
+  Carbon_cost_Mt =0
+}
+
+#————————————————
+  
+#Section 4. Outputs
+
+M_steel = 1000000 #1Mt steel per year
+i= 0.07 #discount rate
+N= 20 #life time of steel plant(consistent through all plants)
+CRF = (i*(1+i)^N)/((1+i)^N-1)
+
+LCOS =(CAPEX * CRF + OPEX + Carbon_cost_Mt) / (M_steel)
+
+if(return_value=="LCOS"){
+  return(LCOS) # USD/ton
+}else if(return_value=="cost_items"){
+    cost_compositon <- data.frame(
+                                Steel_plant = (CAP_BF_BOF/steel_capacity_factor+ CAP_process)*CRF/M_steel,
+                                Electrolyzer = 0,
+                                Iron_ore = input_ore*price_ore,
+                                Flux =  input_flux*price_flux,
+                                Coal = input_cokingCoal*price_cokingCoal,
+                                Oxygen =  input_oxygen*price_oxygen,
+                                Gas_cost = input_naturalGas*price_naturalGas,
+                                Scrap = input_scrap * price_scrap,
+                                Labor = cost_labor + (pro_labor_input* pro_labor_price*2088)/M_steel,
+                                Water = pro_water_input* pro_water_price,
+                                Electricity = input_electricity*price_electricity + pro_electricity_input  * pro_electricity_price,
+                                Maintainance = OPEX_maintainance/M_steel,
+                                Shipping = OPEX_transport/M_steel,
+                                Carbon_cost = Carbon_cost_Mt/M_steel)
+  return(cost_compositon)# USD/ton
+    
+}
+}
+
+cost_model_SC8(return_value = "LCOS")
+sum(cost_model_SC8(return_value = "cost_items"))
+cost_model_SC8(return_value = "cost_items")
+```
+# 03 Analysis and Visulization
+
+## Monte Carlo simulation
+Note that 100000 iteration times takes a longer time. 
+```{r}
+# function for Monte Carlo simulation based on uniform distribution
+MC_simulation <- function(mca_min,mca_max){
+      output<- runif(1, min=mca_min, max=mca_max)
+  return(output)
+}
+
+iteration_times = 100000 #note this is time consuming
+  
+df_MC_SCs <- tibble()
+df_MC_var <- tibble()
+    
+for (i in 1:iteration_times){
+
+  # manually define range of each parameter
+H2_prod_eff            = MC_simulation(18.1,29.8)
+ele_water_price        = MC_simulation(1.0,6.8)
+CAP_electro_price      = MC_simulation(682000,1210959)
+LH2_trans_cost_coeffi  = MC_simulation(1.6,2.82) #2.47euro/kg, 1.142 USD/euro
+electro_cap_factor     = MC_simulation(0.6,0.865)
+electricity_price_J = MC_simulation(56.5,188.2)
+electricity_price_A = MC_simulation(49,69)
+carbon_price           = MC_simulation(2.8,130)
+labor_price_A          = MC_simulation(35,60)
+NG_price               = MC_simulation(0.03,0.084)
+cokingCoal_price       = MC_simulation(108.41,229.12)
+
+df_MC_SCs[1,i] <-cost_model_SC1(
+                          H2_prod_eff=H2_prod_eff,
+                          ele_water_price=ele_water_price,
+                          CAP_electro_price=CAP_electro_price,
+                          LH2_trans_cost_coeffi=LH2_trans_cost_coeffi,
+                          electro_cap_factor=electro_cap_factor, 
+                          electricity_price_J = electricity_price_J,
+                          electricity_price_A =electricity_price_A,
+                          carbon_price = carbon_price,
+                          labor_price_A = labor_price_A,
+                          Carbon_price_exist = TRUE,
+                          NG_price = NG_price,
+                          cokingCoal_price = cokingCoal_price,                          
+                          )
+
+df_MC_SCs[2,i] <-cost_model_SC2(
+                          H2_prod_eff=H2_prod_eff,
+                          ele_water_price=ele_water_price,
+                          CAP_electro_price=CAP_electro_price,
+                          LH2_trans_cost_coeffi=LH2_trans_cost_coeffi,
+                          electro_cap_factor=electro_cap_factor, 
+                          electricity_price_J = electricity_price_J,
+                          electricity_price_A =electricity_price_A,
+                          carbon_price = carbon_price,
+                          labor_price_A = labor_price_A,
+                          Carbon_price_exist = TRUE,
+                          NG_price = NG_price,
+                          cokingCoal_price = cokingCoal_price
+                          )
+  
+  
+df_MC_SCs[3,i] <-cost_model_SC3(
+                          H2_prod_eff=H2_prod_eff,
+                          ele_water_price=ele_water_price,
+                          CAP_electro_price=CAP_electro_price,
+                          LH2_trans_cost_coeffi=LH2_trans_cost_coeffi,
+                          electro_cap_factor=electro_cap_factor, 
+                          electricity_price_J = electricity_price_J,
+                          electricity_price_A =electricity_price_A,
+                          carbon_price = carbon_price,
+                          labor_price_A = labor_price_A,
+                          Carbon_price_exist = TRUE,
+                          NG_price = NG_price,
+                          cokingCoal_price = cokingCoal_price
+                          )
+
+df_MC_SCs[4,i] <-cost_model_SC4(
+                          H2_prod_eff=H2_prod_eff,
+                          ele_water_price=ele_water_price,
+                          CAP_electro_price=CAP_electro_price,
+                          LH2_trans_cost_coeffi=LH2_trans_cost_coeffi,
+                          electro_cap_factor=electro_cap_factor, 
+                          electricity_price_J = electricity_price_J,
+                          electricity_price_A =electricity_price_A,
+                          carbon_price = carbon_price,
+                          labor_price_A = labor_price_A,
+                          Carbon_price_exist = TRUE,
+                          NG_price = NG_price,
+                          cokingCoal_price = cokingCoal_price
+                          )
+
+df_MC_SCs[5,i] <-cost_model_SC5(
+                          H2_prod_eff=H2_prod_eff,
+                          ele_water_price=ele_water_price,
+                          CAP_electro_price=CAP_electro_price,
+                          LH2_trans_cost_coeffi=LH2_trans_cost_coeffi,
+                          electro_cap_factor=electro_cap_factor, 
+                          electricity_price_J = electricity_price_J,
+                          electricity_price_A =electricity_price_A,
+                          carbon_price = carbon_price,
+                          labor_price_A = labor_price_A,
+                          Carbon_price_exist = TRUE,
+                          NG_price = NG_price,
+                          cokingCoal_price = cokingCoal_price
+                          )
+
+df_MC_SCs[6,i] <-cost_model_SC6(
+                          H2_prod_eff=H2_prod_eff,
+                          ele_water_price=ele_water_price,
+                          CAP_electro_price=CAP_electro_price,
+                          LH2_trans_cost_coeffi=LH2_trans_cost_coeffi,
+                          electro_cap_factor=electro_cap_factor, 
+                          electricity_price_J = electricity_price_J,
+                          electricity_price_A =electricity_price_A,
+                          carbon_price = carbon_price,
+                          labor_price_A = labor_price_A,
+                          Carbon_price_exist = TRUE,
+                          NG_price = NG_price,
+                          cokingCoal_price = cokingCoal_price
+                          )
+
+df_MC_SCs[7,i] <-cost_model_SC7(
+                          H2_prod_eff=H2_prod_eff,
+                          ele_water_price=ele_water_price,
+                          CAP_electro_price=CAP_electro_price,
+                          LH2_trans_cost_coeffi=LH2_trans_cost_coeffi,
+                          electro_cap_factor=electro_cap_factor, 
+                          electricity_price_J = electricity_price_J,
+                          electricity_price_A =electricity_price_A,
+                          carbon_price = carbon_price,
+                          labor_price_A = labor_price_A,
+                          Carbon_price_exist = TRUE,
+                          NG_price = NG_price,
+                          cokingCoal_price = cokingCoal_price
+                          )
+
+df_MC_var <- rbind(df_MC_var,tibble(
+  H2_prod_eff,
+  ele_water_price,
+  CAP_electro_price,
+  LH2_trans_cost_coeffi,
+  electro_cap_factor, 
+  electricity_price_J,
+  electricity_price_A,
+  carbon_price,
+  labor_price_A,
+  NG_price ,
+  cokingCoal_price
+))
+}
+
+```
+
+
+
+
+## Fig. 2(a) The LCOS and its composition of various supply chain
+```{r}
+#decide which result to return
+cost_composition_fun <- function(cost_model,SC_class){
+  test  <- cost_model(return_value = "cost_items",Carbon_price_exist = TRUE)
+  test1 <- pivot_longer(test,1:ncol(test))
+  test1$SC =SC_class
+  return(test1)
+}
+
+cost_composition_fun_SC1234<- tibble()
+cost_composition_fun_SC1234 <- 
+  rbind(cost_composition_fun(cost_model_SC1,"A_H2Ore_J_DRI_EAF"),
+        cost_composition_fun(cost_model_SC2,"A_H2DRI_J_EAF"),
+        cost_composition_fun(cost_model_SC3,"A_Steel_J"),
+        cost_composition_fun(cost_model_SC4,"A_Ore_J_H2DRI_EAF"),
+        cost_composition_fun(cost_model_SC5,"J_BF_BOF_CCS"),
+        cost_composition_fun(cost_model_SC6,"J_Scrap_EAF"),
+        cost_composition_fun(cost_model_SC7,"J_NG_DRI_EAF"),
+        cost_composition_fun(cost_model_SC8,"J_BF_BOF"))
+        
+
+
+colors <- c("#e1e1db","#ac0041", "#e8274a", "#ff6232","#ff8640", "#ffaa4f", "#ffdf7d", "#fffdb7",
+            "#e2f68b", "#9ddf9e", "#39c5a3", "#008ac2", "#614ea7", "#342e47")
+
+
+
+# Mannually change the order of y-axis and legend
+unique(cost_composition_fun_SC1234$name)
+cost_composition_fun_SC1234$name <- factor(cost_composition_fun_SC1234$name, 
+                                           levels = c("Carbon_cost","Steel_plant", "Electrolyzer", "Iron_ore","Flux","Scrap","Coal", "Water", "Oxygen", "Gas_cost","Labor","Electricity", "Maintainance","Shipping"))
+cost_composition_fun_SC1234$SC <- factor(cost_composition_fun_SC1234$SC, 
+                                           levels = c("A_H2Ore_J_DRI_EAF","A_H2DRI_J_EAF", "A_Steel_J", "A_Ore_J_H2DRI_EAF", "J_BF_BOF_CCS","J_Scrap_EAF", "J_NG_DRI_EAF","J_BF_BOF"))
+
+# visualization
+fig2 <-
+  ggplot(cost_composition_fun_SC1234, aes(fill=name, y=SC, x=value)) + 
+  geom_bar(position='stack', stat='identity')+
+  scale_fill_manual(values = colors) +
+  #scale_fill_brewer(palette = "Spectral")+
+  ylab("Supply chains") +
+  xlab("LCOS (USD/ton)")+
+  labs(fill = "Cost items")+
+  theme_bw()+
+  theme(
+    text = element_text(family = "Times New Roman"), # font type
+    panel.grid.major = element_blank(), # exclude main grid line
+    panel.grid.minor = element_blank(),  # exclude grid line
+    panel.border = element_blank(),     # exclude frame line
+    axis.line = element_line(color = "black"), # keep x and y-axis
+    axis.title.x = element_text(margin = margin(t = 10)), # adjust x position
+    axis.title.y = element_text(margin = margin(r = 10)),# adjust y position
+  )
+  
+fig2
+```
+
+
+
+## Fig. 2(b) LCOS histogram under various supply chain strategies
+```{r}
+df_MC_reg <- cbind(df_MC_var,t(df_MC_SCs))[,]
+
+colnames(df_MC_reg) <- c(  
+  "H2_prod_eff",
+  "ele_water_price",
+  "CAP_electro_price",
+  "LH2_trans_cost_coeffi",
+  "electro_cap_factor", 
+  "electricity_price_J",
+  "electricity_price_A",
+  "carbon_price",
+  "labor_price_A",
+  "NG_price" ,
+  "cokingCoal_price",
+  "SC1",
+  "SC2",
+  "SC3",
+  "SC4",
+  "SC5",
+  "SC6",
+  "SC7")
+
+ggplot(df_MC_reg, aes(x = SC1)) + 
+geom_step(stat = "bin", aes(y = ..count../1000, color = "A_H2Ore_J_DRI_EAF"), binwidth = 5) +
+geom_step(stat = "bin", aes(x = SC2, y = ..count../1000, color = "A_H2DRI_J_EAF"), binwidth = 5) +
+geom_step(stat = "bin", aes(x = SC3, y = ..count../1000, color = "A_steel_J"), binwidth = 5) +
+geom_step(stat = "bin", aes(x = SC4, y = ..count../1000, color = "A_Ore_J_H2DRI_EAF"), binwidth = 5) +
+geom_step(stat = "bin", aes(x = SC5, y = ..count../1000, color = "J_BF_BOF_CCS"), binwidth = 5) +
+geom_step(stat = "bin", aes(x = SC6, y = ..count../1000, color = "J_Scrap_EAF"), binwidth = 5) +
+geom_step(stat = "bin", aes(x = SC7, y = ..count../1000, color = "J_NG_DRI_EAF"), binwidth = 5) +
+  theme_bw()+
+  labs(color = "Supply chains")+
+  theme(
+    text = element_text(family = "Times New Roman"), 
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),  
+    panel.border = element_blank(),     
+    axis.line = element_line(color = "black"), 
+    axis.title.x = element_text(margin = margin(t = 10),size = 14), 
+    axis.title.y = element_text(margin = margin(r = 10),size = 14),
+    axis.text.x = element_text(size = 14), 
+    axis.text.y = element_text(size = 14) 
+  )+
+  scale_x_continuous(limits = c(300,1100 ))+
+  xlab("LCOS (USD/ton steel)") + 
+  ylab("Probability(%)")+
+  scale_color_npg()
+  #scale_color_futurama()
+
+
+
+```
+
+
+## Fig. 3 Dominant factors that affect the uncertainty of LCOS
+```{r}
+ave_contribution_SCs <- as.data.frame(matrix(nrow=11,ncol=1))
+
+for ( i in 1:7){
+  lm.test<-lm(paste("SC",i,"~", "H2_prod_eff + ele_water_price + CAP_electro_price+ LH2_trans_cost_coeffi + electro_cap_factor + electricity_price_J +  electricity_price_A + carbon_price+ labor_price_A + NG_price + cokingCoal_price", sep = ""), data = df_MC_reg)
+  da.attitude<-dominanceAnalysis(lm.test)
+  ave_contribution_SCs <- cbind(ave_contribution_SCs,as.data.frame(averageContribution(da.attitude)))
+}
+
+ave_contribution_SCs$V1 <- c( "Electrolyzer efficiency",
+                              "Water price for electrolysis",
+                              "CAPEX of electrolyzer",
+                              "Hydrogen transport cost",
+                              "Capacity factor of electrolysis", 
+                              "Electricity price in Japan",
+                              "Electricity price in Australia",
+                              "Carbon price",
+                              "Labor cost in Australia",
+                              "Natural gas price",
+                              "Coking coal price")
+
+colnames(ave_contribution_SCs) <- c("Parameters", "A_H2Ore_J_DRI_EAF","A_H2DRI_J_EAF"
+, "A_steel_J"  
+, "A_Ore_J_H2DRI_EAF"
+, "J_BF_BOF_CCS"
+, "J_Scrap_EAF"
+, "J_NG_DRI_EAF")
+
+SCs_variance_long <- gather(ave_contribution_SCs, SCs, variance, A_H2Ore_J_DRI_EAF:J_NG_DRI_EAF, factor_key=TRUE)
+
+colours = c(  "#582630", "#F7EE7F", "#4DAA57","#F1A66A","#F26157", "#F9ECCC", "#679289")
+
+fig3 <-
+ggplot(SCs_variance_long, aes(SCs, variance)) +
+        geom_point(aes(color = Parameters)) + #scale_fill_brewer(palette = "Spectral")+
+  ylab("Relative Importance Indicator") +
+  xlab("Supply chains")+
+  labs(fill = "Parameters")+
+  theme_bw()+
+  theme(
+    text = element_text(family = "Times New Roman"), 
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.border = element_blank(),     
+    axis.line = element_line(color = "black"), 
+    axis.title.x = element_text(margin = margin(t = 10)), 
+    axis.title.y = element_text(margin = margin(r = 10)),
+    axis.text.x = element_text(angle = 30, vjust = 0.5, hjust=0.5) 
+  )+scale_color_brewer(palette = "Paired")
+
+fig3
+```
+
+## Fig. 4(a) Electrolyzer efficiency 
+LCOS of various production chains under variation of electrolyzer efficiency 
+
+```{r}
+x=10:30
+wide <- data.frame(x = 10:30,
+           A_H2Ore_J_DRI_EAF=cost_model_SC1(H2_prod_eff=x),
+           A_H2DRI_J_EAF=cost_model_SC2(H2_prod_eff=x),
+           A_Steel_J=cost_model_SC3(H2_prod_eff=x),
+           A_Ore_J_H2DRI_EAF=cost_model_SC4(H2_prod_eff=x),
+           J_BF_BOF_CCS=cost_model_SC5(H2_prod_eff=x),
+           J_Scrap_EAF=cost_model_SC6(electricity_price_A=x),
+           J_NG_DRI_EAF=cost_model_SC7(H2_prod_eff=x))
+
+long_data <- pivot_longer(wide, 
+                          cols = c(2:8), 
+                          names_to = "Series",  
+                          values_to = "X") 
+  custom_colors <- c("#4178ce", "#ebdd59", "#c5dce5", "#becca9", "#305744", "#876974", "#36d1dd", "#e29437", "#8f956f")
+  line_type <- c("solid", "dashed", "dotted", "dotdash", "longdash", "twodash", "22", "44", "13")
+
+fig7<-
+ggplot(data = long_data, aes(x = x, y = X, color = Series)) +
+  geom_line() +
+  xlab("Electrolyzer efficiency (kg/MWh)") + ylab("LCOS (USD/ton steel)")+
+  scale_color_manual(values = custom_colors)+
+  # scale_linetype_manual(values = line_type)+
+  theme_bw()+
+  theme(
+    text = element_text(family = "Times New Roman"), 
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),  
+    panel.border = element_blank(),     
+    axis.line = element_line(color = "black"),
+    axis.title.x = element_text(margin = margin(t = 10),size = 14), 
+    axis.title.y = element_text(margin = margin(r = 10),size = 14),
+    axis.text.x = element_text(size = 14), 
+    axis.text.y = element_text(size = 14) 
+  )+
+  labs(color = "Supply chains") +
+  geom_vline(aes(xintercept = 18.1), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)+
+  geom_vline(aes(xintercept = 20.8), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)+
+  geom_vline(aes(xintercept = 28.6), 
+                    color = "black", 
+                    linetype = "dashed", 
+                    size = 0.5)
+
+fig7
+```
+
+## Fig. 4(b) H2 transport cost 
+LCOS of various production chains under variation of unit H2 transport cost 
+
+```{r}
+x=0.2:4
+wide <- data.frame(x= 0.2:4,
+           A_H2Ore_J_DRI_EAF=cost_model_SC1(LH2_trans_cost_coeffi=x),
+           A_H2DRI_J_EAF=cost_model_SC2(LH2_trans_cost_coeffi=x),
+           A_Steel_J=cost_model_SC3(LH2_trans_cost_coeffi=x),
+           A_Ore_J_H2DRI_EAF=cost_model_SC4(LH2_trans_cost_coeffi=x),
+           J_BF_BOF_CCS=cost_model_SC5(LH2_trans_cost_coeffi=x),
+           J_Scrap_EAF=cost_model_SC6(electricity_price_A=x),
+           J_NG_DRI_EAF=cost_model_SC7(LH2_trans_cost_coeffi=x))
+
+
+
+long_data <- pivot_longer(wide, 
+                          cols = c(2:8),  
+                          names_to = "Series",  
+                          values_to = "X") 
+  custom_colors <- c("#4178ce", "#ebdd59", "#c5dce5", "#becca9", "#305744", "#876974", "#36d1dd", "#e29437", "#8f956f")
+  line_type <- c("solid", "dashed", "dotted", "dotdash", "longdash", "twodash", "22", "44", "13")
+
+fig8<-
+ggplot(data = long_data, aes(x = x, y = X, color = Series)) +
+  geom_line() +
+  xlab("Unit hydrogen transport cost (USD/kg)") + ylab("LCOS (USD/ton steel)")+
+  scale_color_manual(values = custom_colors)+
+  scale_linetype_manual(values = line_type)+
+  theme_bw()+
+  theme(
+    text = element_text(family = "Times New Roman"), 
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),  
+    panel.border = element_blank(),     
+    axis.line = element_line(color = "black"), 
+    axis.title.x = element_text(margin = margin(t = 10),size = 14), 
+    axis.title.y = element_text(margin = margin(r = 10),size = 14),
+    axis.text.x = element_text(size = 14), 
+    axis.text.y = element_text(size = 14) 
+  )+
+  labs(color = "Supply chains") +
+  geom_vline(aes(xintercept = 1.87), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)+
+  geom_vline(aes(xintercept = 2.66), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)
+
+fig8
+```
+
+## Fig. 4(c) LCOE in Australia. 
+LCOS of various production chains under variation of LCOE in Australia
+
+```{r}
+x = 0:100
+wide <- data.frame(x = 0:100,
+           A_H2Ore_J_DRI_EAF=cost_model_SC1(electricity_price_A=x),
+           A_H2DRI_J_EAF=cost_model_SC2(electricity_price_A=x),
+           A_Steel_J=cost_model_SC3(electricity_price_A=x),
+           A_Ore_J_H2DRI_EAF=cost_model_SC4(electricity_price_A=x),
+           J_BF_BOF_CCS=cost_model_SC5(electricity_price_A=x),
+           J_Scrap_EAF=cost_model_SC6(electricity_price_A=x),
+           J_NG_DRI_EAF=cost_model_SC7(electricity_price_A=x))
+
+long_data <- pivot_longer(wide, 
+                          cols = c(2:8),  # 选择需要合并的列
+                          names_to = "Series",  # 新列用于标识不同系列
+                          values_to = "X")  # 新列用于存储 X 值
+  custom_colors <- c("#4178ce", "#ebdd59", "#c5dce5", "#becca9", "#305744", "#876974", "#36d1dd", "#e29437", "#8f956f")
+
+fig4 <- 
+ggplot(data = long_data, aes(x = x, y = X, color = Series)) +
+  geom_line() +
+  xlab("LCOE of solar energy in Australia(USD/MWh)") + ylab("LCOS (USD/ton steel)")+
+  scale_color_manual(values = custom_colors)+
+  theme_bw()+
+  theme(
+    text = element_text(family = "Times New Roman"), 
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),  
+    panel.border = element_blank(),     
+    axis.line = element_line(color = "black"), 
+    axis.title.x = element_text(margin = margin(t = 10),size = 14), 
+    axis.title.y = element_text(margin = margin(r = 10),size = 14),
+    axis.text.x = element_text(size = 14), 
+    axis.text.y = element_text(size = 14) 
+  )+
+  labs(color = "Supply chains") +
+  geom_vline(aes(xintercept = 49), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)+
+    geom_vline(aes(xintercept = 69), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)
+
+fig4
+```
+
+## Fig. 5(a) LCOE in Japan
+LCOS of various production chains under variation of electricity cost in Japan.
+
+```{r}
+x=0:200
+wide <- data.frame(x = 0:200,
+           A_H2Ore_J_DRI_EAF=cost_model_SC1(electricity_price_J=x),
+           A_H2DRI_J_EAF=cost_model_SC2(electricity_price_J=x),
+           A_Steel_J=cost_model_SC3(electricity_price_J=x),
+           A_Ore_J_H2DRI_EAF=cost_model_SC4(electricity_price_J=x),
+           J_BF_BOF_CCS=cost_model_SC5(electricity_price_J=x),
+           J_Scrap_EAF=cost_model_SC6(electricity_price_J=x),
+           J_NG_DRI_EAF=cost_model_SC7(electricity_price_J=x))
+
+long_data <- pivot_longer(wide, 
+                          cols = c(2:8),  
+                          names_to = "Series", 
+                          values_to = "X") 
+  custom_colors <- c("#4178ce", "#ebdd59", "#c5dce5", "#becca9", "#305744", "#876974", "#36d1dd", "#e29437", "#8f956f")
+
+fig5<-
+ggplot(data = long_data, aes(x = x, y = X, color = Series)) +
+  geom_line() +
+  xlab("LCOE of solar energy in in Japan(USD/MWh)") + ylab("LCOS (USD/ton steel)")+
+  scale_color_manual(values = custom_colors)+
+  theme_bw()+
+  theme(
+    text = element_text(family = "Times New Roman"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),  
+    panel.border = element_blank(),    
+    axis.line = element_line(color = "black"), 
+    axis.title.x = element_text(margin = margin(t = 10),size = 14), 
+    axis.title.y = element_text(margin = margin(r = 10),size = 14),
+    axis.text.x = element_text(size = 14), 
+    axis.text.y = element_text(size = 14) 
+  )+
+  labs(color = "Supply chains") +
+  geom_vline(aes(xintercept = 188.2), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)+
+  geom_vline(aes(xintercept = 56.5), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)
+
+
+
+
+fig5
+```
+
+## Fig. 5(b) Carbon price in Japan
+LCOS of various production chains under variation of carbon price in Japan. 
+
+```{r}
+x=0:500
+wide <- data.frame(x = 0:500,
+           A_H2Ore_J_DRI_EAF=cost_model_SC1(carbon_price=x,),
+           A_H2DRI_J_EAF=cost_model_SC2(carbon_price=x),
+           A_Steel_J=cost_model_SC3(carbon_price=x),
+           A_Ore_J_H2DRI_EAF=cost_model_SC4(carbon_price=x),
+           J_BF_BOF_CCS=cost_model_SC5(carbon_price=x,Carbon_price_exist = TRUE),
+           J_Scrap_EAF=cost_model_SC6(electricity_price_A=x),
+           J_NG_DRI_EAF=cost_model_SC7(carbon_price=x,Carbon_price_exist = TRUE))
+
+long_data <- pivot_longer(wide, 
+                          cols = c(2:8),
+                          names_to = "Series", 
+                          values_to = "X") 
+  custom_colors <- c("#4178ce", "#ebdd59", "#c5dce5", "#becca9", "#305744", "#876974", "#36d1dd", "#e29437", "#8f956f")
+  line_type <- c("solid", "dashed", "dotted", "dotdash", "longdash", "twodash", "22", "44", "13")
+
+fig6<-
+ggplot(data = long_data, aes(x = x, y = X, color = Series)) +
+  geom_line() +
+  xlab("Carbon price (USD/t CO2)") + ylab("LCOS (USD/ton steel)")+
+  scale_color_manual(values = custom_colors)+
+  theme_bw()+
+  theme(
+    text = element_text(family = "Times New Roman"), 
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.border = element_blank(),     
+    axis.line = element_line(color = "black"), 
+    axis.title.x = element_text(margin = margin(t = 10),size = 14), 
+    axis.title.y = element_text(margin = margin(r = 10),size = 14),
+    axis.text.x = element_text(size = 14), 
+    axis.text.y = element_text(size = 14) 
+  )+
+  labs(color = "Supply chains") +
+  geom_vline(aes(xintercept = 2.8), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)+
+  geom_vline(aes(xintercept = 114.2), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)+
+  geom_vline(aes(xintercept = 130), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)
+
+fig6
+```
+
+
+
+
+
+## Fig. S1(a) Natural gas price
+LCOS of various production chains under variation of natural gas price
+
+```{r}
+x=seq(0.01, 0.1, length.out = 10)
+wide <- data.frame(input=x,
+           A_H2Ore_J_DRI_EAF=cost_model_SC1(NG_price=x),
+           A_H2DRI_J_EAF=cost_model_SC2(NG_price=x),
+           A_Steel_J=cost_model_SC3(NG_price=x),
+           A_Ore_J_H2DRI_EAF=cost_model_SC4(NG_price=x),
+           J_BF_BOF_CCS=cost_model_SC5(NG_price=x),
+           J_Scrap_EAF=cost_model_SC6(NG_price=x),
+           J_NG_DRI_EAF=cost_model_SC7(NG_price=x))
+
+long_data <- pivot_longer(wide, 
+                          cols = c(2:8),  
+                          names_to = "Series",  
+                          values_to = "X") 
+  custom_colors <- c("#4178ce", "#ebdd59", "#c5dce5", "#becca9", "#305744", "#876974", "#36d1dd", "#e29437", "#8f956f")
+  line_type <- c("solid", "dashed", "dotted", "dotdash", "longdash", "twodash", "22", "44", "13")
+
+fig9<-
+ggplot(data = long_data, aes(x = input*1000, y = X, color = Series)) +
+  geom_line() +
+  xlab("Liquid Natural Gas price (USD/MWh)") + ylab("LCOS (USD/ton steel)")+
+  scale_color_manual(values = custom_colors)+
+  scale_linetype_manual(values = line_type)+
+  theme_bw()+
+  theme(
+    text = element_text(family = "Times New Roman"), 
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),  
+    panel.border = element_blank(),     
+    axis.line = element_line(color = "black"), 
+    axis.title.x = element_text(margin = margin(t = 10),size = 14), 
+    axis.title.y = element_text(margin = margin(r = 10),size = 14),
+    axis.text.x = element_text(size = 14), 
+    axis.text.y = element_text(size = 14) 
+  )+
+  labs(color = "Supply chains") +
+  geom_vline(aes(xintercept = 30), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)+
+  geom_vline(aes(xintercept = 84), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)
+fig9
+
+```
+
+## Fig. S1(b) Coking coal price
+LCOS of various production chains under variation of coking coal price
+
+```{r}
+x=seq(100, 250, length.out = 50)
+wide <- data.frame(input=x,
+           A_H2Ore_J_DRI_EAF=cost_model_SC1(cokingCoal_price=x),
+           A_H2DRI_J_EAF=cost_model_SC2(cokingCoal_price=x),
+           A_Steel_J=cost_model_SC3(cokingCoal_price=x),
+           A_Ore_J_H2DRI_EAF=cost_model_SC4(cokingCoal_price=x),
+           J_BF_BOF_CCS=cost_model_SC5(cokingCoal_price=x),
+           J_Scrap_EAF=cost_model_SC6(cokingCoal_price=x),
+           J_NG_DRI_EAF=cost_model_SC7(cokingCoal_price=x))
+
+long_data <- pivot_longer(wide, 
+                          cols = c(2:8),  
+                          names_to = "Series",  
+                          values_to = "X") 
+  custom_colors <- c("#4178ce", "#ebdd59", "#c5dce5", "#becca9", "#305744", "#876974", "#36d1dd", "#e29437", "#8f956f")
+  line_type <- c("solid", "dashed", "dotted", "dotdash", "longdash", "twodash", "22", "44", "13")
+
+fig10<-
+ggplot(data = long_data, aes(x = input, y = X, color = Series)) +
+  geom_line() +
+  xlab("Japan coking coal imported CIF price (USD/ton)") + ylab("LCOS (USD/ton steel)")+
+  scale_color_manual(values = custom_colors)+
+  scale_linetype_manual(values = line_type)+
+  theme_bw()+
+  theme(
+    text = element_text(family = "Times New Roman"), 
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),  
+    panel.border = element_blank(),     
+    axis.line = element_line(color = "black"), 
+    axis.title.x = element_text(margin = margin(t = 10),size = 14), 
+    axis.title.y = element_text(margin = margin(r = 10),size = 14),
+    axis.text.x = element_text(size = 14), 
+    axis.text.y = element_text(size = 14) 
+  )+
+  labs(color = "Supply chains") +
+  geom_vline(aes(xintercept = 108.41), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)+
+  geom_vline(aes(xintercept = 229.12), 
+                    color = "red", 
+                    linetype = "dashed", 
+                    size = 0.5)
+fig10
+```
+
+
+
